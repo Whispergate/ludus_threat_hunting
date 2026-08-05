@@ -1,0 +1,18 @@
+### Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+[Unit]
+Description=Zeek pcap stream receiver (Windows agents)
+Wants=network-online.target
+After=network-online.target zeek-mirror-receiver.service
+Requires=zeek-mirror-receiver.service
+
+[Service]
+# -u is one-directional: agents only ever send. fork gives each connected
+# agent its own tcpreplay, so one agent disconnecting does not disturb others.
+ExecStart=/usr/bin/socat -u \
+    TCP-LISTEN:{{ ludus_threat_hunting_mirror_pcap_stream_port }},reuseaddr,fork \
+    EXEC:/usr/local/bin/zeek-pcap-inject
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,23 @@
+### Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+[Unit]
+Description=Prepare {{ ludus_threat_hunting_iface }} for Zeek packet capture
+Wants=network-online.target
+After=network-online.target
+Before=zeek.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Promiscuous mode is required to see mirrored traffic that is not addressed
+# to this VM's MAC.
+ExecStart=/usr/sbin/ip link set dev {{ ludus_threat_hunting_iface }} promisc on
+# Offloads make the kernel hand libpcap re-assembled super-frames, so Zeek
+# records byte counts and inter-arrival times that never existed on the wire.
+# That feeds straight into RITA's data size and timestamp beacon subscores.
+# Prefixed with "-" because virtio NICs do not implement every knob.
+ExecStart=-/usr/sbin/ethtool -K {{ ludus_threat_hunting_iface }} gro off lro off tso off gso off
+ExecStart=-/usr/sbin/ethtool -K {{ ludus_threat_hunting_iface }} rx-vlan-offload off tx-vlan-offload off
+ExecStop=-/usr/sbin/ip link set dev {{ ludus_threat_hunting_iface }} promisc off
+
+[Install]
+WantedBy=multi-user.target

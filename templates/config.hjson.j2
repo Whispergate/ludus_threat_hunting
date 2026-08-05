@@ -1,0 +1,89 @@
+// Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+// Change the ludus_threat_hunting_rita_* role variables instead.
+{
+    "update_check_enabled": {{ ludus_threat_hunting_rita_update_check | lower }},
+    "threat_intel": {
+        // Online feeds must be valid URLs serving one IP or domain per line.
+        // Custom file feeds live in /etc/rita/threat_intel_feeds/.
+        "online_feeds": {{ ludus_threat_hunting_rita_online_feeds | to_json }}
+    },
+    "filtering": {
+        // Connections where both endpoints fall inside internal_subnets are
+        // dropped at import time. In a Ludus range every host is RFC1918, so
+        // using RITA's stock RFC1918 list here discards nearly all range
+        // traffic. See the role README.
+        "internal_subnets": {{ ludus_threat_hunting_internal_subnets | to_json }},
+
+        // Overrides never_included_* and internal_subnets.
+        "always_included_subnets": {{ ludus_threat_hunting_rita_always_included_subnets | to_json }},
+        "always_included_domains": {{ ludus_threat_hunting_rita_always_included_domains | to_json }},
+
+        // Dropped at import time regardless of anything else.
+        "never_included_subnets": {{ ludus_threat_hunting_rita_never_included_subnets | to_json }},
+        "never_included_domains": {{ ludus_threat_hunting_rita_never_included_domains | to_json }},
+
+        "filter_external_to_internal": {{ ludus_threat_hunting_rita_filter_external_to_internal | lower }}
+    },
+    "scoring": {
+        "beacon": {
+            // Host pairs with fewer unique connections than this are never
+            // analyzed for beaconing. Lower it for short range captures.
+            "unique_connection_threshold": {{ ludus_threat_hunting_rita_beacon_unique_connection_threshold }},
+            // Weighted average of four subscores. These must sum to 1.
+            "timestamp_score_weight": 0.25,
+            "datasize_score_weight": 0.25,
+            "duration_score_weight": 0.25,
+            "histogram_score_weight": 0.25,
+            "duration_min_hours_seen": 6,
+            "duration_consistency_ideal_hours_seen": 12,
+            "histogram_mode_sensitivity": 0.05,
+            "histogram_bimodal_outlier_removal": 1,
+            "histogram_bimodal_min_hours_seen": 11,
+            "score_thresholds": {
+                "base": 50,
+                "low": 70,
+                "medium": 90,
+                "high": 100
+            }
+        },
+        "long_connection_score_thresholds": {
+            // seconds
+            "base": 3600,
+            "low": 14400,
+            "medium": 28800,
+            "high": 43200
+        },
+        "c2_score_thresholds": {
+            // number of subdomains
+            "base": 100,
+            "low": 500,
+            "medium": 800,
+            "high": 1000
+        },
+        "strobe_impact": {
+            "category": "high"
+        },
+        "threat_intel_impact": {
+            "category": "high"
+        }
+    },
+    "modifiers": {
+        "threat_intel_score_increase": 0.15,
+        "threat_intel_datasize_threshold": 25000000,
+        "prevalence_score_increase": 0.15,
+        "prevalence_increase_threshold": 0.02,
+        "prevalence_score_decrease": 0.15,
+        "prevalence_decrease_threshold": 0.5,
+        // first seen scoring only applies to rolling datasets
+        "first_seen_score_increase": 0.15,
+        "first_seen_increase_threshold": 7,
+        "first_seen_score_decrease": 0.15,
+        "first_seen_decrease_threshold": 30,
+        "missing_host_count_score_increase": 0.1,
+        "rare_signature_score_increase": 0.15,
+        "c2_over_dns_direct_conn_score_increase": 0.15,
+        "mime_type_mismatch_score_increase": 0.15
+    },
+    "months_to_keep_historical_first_seen": 3,
+    "batch_size": 100000
+}

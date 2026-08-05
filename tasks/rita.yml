@@ -1,0 +1,98 @@
+---
+# RITA ships as an installer tarball rather than a package. install_rita.sh
+# drops a /usr/local/bin/rita wrapper, a docker-compose stack in /opt/rita,
+# and configuration in /etc/rita, then pulls the RITA, ClickHouse and
+# syslog-ng images.
+
+- name: Fetch the RITA installer (cached on the Ludus host)
+  ansible.builtin.include_tasks:
+    file: download_file.yml
+  vars:
+    ludus_download_file_name: "rita-{{ ludus_threat_hunting_rita_version }}.tar.gz"
+    ludus_download_file_url: >-
+      https://github.com/activecm/rita/releases/download/{{ ludus_threat_hunting_rita_version }}/rita-{{ ludus_threat_hunting_rita_version }}.tar.gz
+    ludus_download_file_host_path: /opt/ludus_threat_hunting
+    ludus_download_file_checksum: "{{ ludus_threat_hunting_rita_checksum | default(omit) }}"
+
+- name: Read the installed RITA version stamp
+  ansible.builtin.slurp:
+    src: /opt/rita/.ludus_installed_version
+  register: ludus_threat_hunting_rita_stamp
+  failed_when: false
+
+- name: Determine whether RITA needs to be installed
+  ansible.builtin.set_fact:
+    ludus_threat_hunting_rita_needs_install: >-
+      {{ ludus_threat_hunting_rita_stamp.content is not defined
+         or (ludus_threat_hunting_rita_stamp.content | b64decode | trim)
+            != ludus_threat_hunting_rita_version }}
+
+- name: Install RITA
+  when: ludus_threat_hunting_rita_needs_install
+  block:
+    - name: Extract the RITA installer
+      ansible.builtin.unarchive:
+        src: "/opt/ludus_threat_hunting/rita-{{ ludus_threat_hunting_rita_version }}.tar.gz"
+        dest: /opt/ludus_threat_hunting
+        remote_src: true
+
+    - name: Run install_rita.sh
+      ansible.builtin.command:
+        cmd: ./install_rita.sh
+        chdir: "/opt/ludus_threat_hunting/rita-{{ ludus_threat_hunting_rita_version }}-installer"
+      register: ludus_threat_hunting_rita_install
+      changed_when: true
+      environment:
+        PATH: "/usr/local/bin:{{ ansible_env.PATH }}"
+
+    - name: Write the installed RITA version stamp
+      ansible.builtin.copy:
+        dest: /opt/rita/.ludus_installed_version
+        content: "{{ ludus_threat_hunting_rita_version }}\n"
+        mode: "0644"
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+# install_rita.sh deliberately preserves an existing config.hjson, so this
+# template is what actually keeps the config in sync with the role variables.
+- name: Write the RITA configuration
+  ansible.builtin.template:
+    src: config.hjson.j2
+    dest: /etc/rita/config.hjson
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create the custom threat intel feed directory
+  ansible.builtin.file:
+    path: /etc/rita/threat_intel_feeds
+    state: directory
+    mode: "0755"
+
+- name: Write custom threat intel feeds
+  ansible.builtin.copy:
+    dest: "/etc/rita/threat_intel_feeds/{{ item.name }}"
+    content: "{{ item.content }}"
+    mode: "0644"
+  loop: "{{ ludus_threat_hunting_rita_custom_feeds }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# The stack's default LOGS path is /opt/zeek/logs, which matches where the
+# OBS Zeek packages rotate their logs. Keep .env pointed there when the
+# install prefix has been changed.
+- name: Point the RITA stack at the Zeek log directory
+  ansible.builtin.lineinfile:
+    path: /opt/rita/.env
+    regexp: "^LOGS="
+    line: "LOGS={{ ludus_threat_hunting_zeek_prefix }}/logs"
+    state: present
+
+- name: Bring up the RITA backing services
+  ansible.builtin.command:
+    cmd: docker compose -f /opt/rita/docker-compose.yml up -d clickhouse syslog-ng
+    chdir: /opt/rita
+  register: ludus_threat_hunting_rita_up
+  changed_when: "'Started' in ludus_threat_hunting_rita_up.stderr or 'Created' in ludus_threat_hunting_rita_up.stderr"

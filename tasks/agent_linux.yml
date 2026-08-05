@@ -1,0 +1,53 @@
+---
+# Linux agent: mirror a copy of this VM's traffic to the sensor.
+#
+# tc mirred clones frames on the sniffed interface into a gretap tunnel
+# terminated on the sensor. Nothing is stored locally and no analysis runs
+# here -- the agent's only job is to duplicate packets onto the wire.
+
+- name: Require a sensor address
+  ansible.builtin.assert:
+    that:
+      - ludus_threat_hunting_sensor_ip | length > 0
+    fail_msg: >-
+      ludus_threat_hunting_sensor_ip must be set when
+      ludus_threat_hunting_mode is "agent".
+    quiet: true
+
+- name: Resolve the mirrored interface
+  ansible.builtin.set_fact:
+    ludus_threat_hunting_iface: >-
+      {{ ludus_threat_hunting_agent_interface
+         if ludus_threat_hunting_agent_interface | length > 0
+         else ansible_default_ipv4.interface }}
+
+- name: Install agent dependencies
+  ansible.builtin.apt:
+    name:
+      - iproute2
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install the mirror agent script
+  ansible.builtin.template:
+    src: zeek-mirror-agent.sh.j2
+    dest: /usr/local/bin/zeek-mirror-agent
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart mirror agent
+
+- name: Install the mirror agent unit
+  ansible.builtin.template:
+    src: zeek-mirror-agent.service.j2
+    dest: /etc/systemd/system/zeek-mirror-agent.service
+    mode: "0644"
+  notify: Restart mirror agent
+
+- name: Enable and start the mirror agent
+  ansible.builtin.systemd:
+    name: zeek-mirror-agent.service
+    enabled: true
+    state: started
+    daemon_reload: true

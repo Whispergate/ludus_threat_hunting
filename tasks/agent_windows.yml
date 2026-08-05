@@ -1,0 +1,107 @@
+---
+# Windows agent: ship a copy of this VM's traffic to the sensor.
+#
+# Windows has no kernel packet-mirroring primitive -- there is no equivalent
+# of `tc mirred`, and no supported way to hand frames to a remote host as they
+# are forwarded. What it does have is packet capture, so the agent captures
+# and streams the result to the sensor's pcap listener, which injects it onto
+# the same aggregation bridge the Linux GRE agents feed. From the sensor's
+# side the two paths are indistinguishable.
+#
+# Two capture backends:
+#   pktmon  - built into Windows, nothing to install, captures in short chunks
+#   dumpcap - continuous live stream, but needs Npcap/Wireshark present
+
+- name: Require agent mode on Windows
+  ansible.builtin.assert:
+    that:
+      - ludus_threat_hunting_mode == "agent"
+    fail_msg: >-
+      Windows hosts can only run ludus_threat_hunting in "agent" mode.
+      The sensor requires Debian or Ubuntu.
+    quiet: true
+
+- name: Require a sensor address
+  ansible.builtin.assert:
+    that:
+      - ludus_threat_hunting_sensor_ip | length > 0
+    fail_msg: >-
+      ludus_threat_hunting_sensor_ip must be set when
+      ludus_threat_hunting_mode is "agent".
+    quiet: true
+
+- name: Validate the capture backend
+  ansible.builtin.assert:
+    that:
+      - ludus_threat_hunting_agent_windows_backend in ["pktmon", "dumpcap"]
+    fail_msg: >-
+      ludus_threat_hunting_agent_windows_backend must be "pktmon" or "dumpcap"
+      (got: {{ ludus_threat_hunting_agent_windows_backend }}).
+    quiet: true
+
+- name: Create the agent working directory
+  ansible.windows.win_file:
+    path: "{{ ludus_threat_hunting_agent_windows_path }}"
+    state: directory
+
+- name: Check for dumpcap
+  ansible.windows.win_stat:
+    path: "{{ ludus_threat_hunting_agent_dumpcap_path }}"
+  register: ludus_threat_hunting_dumpcap
+  when: ludus_threat_hunting_agent_windows_backend == "dumpcap"
+
+# Npcap's free installer does not support silent installation, so this role
+# will not attempt to install it. Pre-install Wireshark (which bundles Npcap)
+# on the template, or use the pktmon backend.
+- name: Require dumpcap when the dumpcap backend is selected
+  ansible.builtin.assert:
+    that:
+      - ludus_threat_hunting_dumpcap.stat.exists
+    fail_msg: >-
+      dumpcap.exe was not found at {{ ludus_threat_hunting_agent_dumpcap_path }}.
+      Install Wireshark/Npcap on the template first, or set
+      ludus_threat_hunting_agent_windows_backend to "pktmon".
+    quiet: true
+  when: ludus_threat_hunting_agent_windows_backend == "dumpcap"
+
+- name: Install the mirror agent script
+  ansible.windows.win_template:
+    src: zeek-mirror-agent.ps1.j2
+    dest: "{{ ludus_threat_hunting_agent_windows_path }}\\zeek-mirror-agent.ps1"
+
+- name: Install the mirror agent scheduled task
+  community.windows.win_scheduled_task:
+    name: ZeekMirrorAgent
+    description: >-
+      Streams a copy of this host's network traffic to the Ludus Zeek sensor
+      at {{ ludus_threat_hunting_sensor_ip }}.
+    actions:
+      - path: powershell.exe
+        arguments: >-
+          -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden
+          -File "{{ ludus_threat_hunting_agent_windows_path }}\zeek-mirror-agent.ps1"
+    triggers:
+      - type: boot
+    # pktmon and raw capture both require administrative privileges.
+    username: SYSTEM
+    run_level: highest
+    # The script loops forever by design; it must not be killed on a timer or
+    # restarted alongside a still-running copy.
+    execution_time_limit: PT0S
+    multiple_instances: 2
+    disallow_start_if_on_batteries: false
+    stop_if_going_on_batteries: false
+    state: present
+    enabled: true
+
+- name: Restart the mirror agent scheduled task
+  community.windows.win_scheduled_task_stat:
+    name: ZeekMirrorAgent
+  register: ludus_threat_hunting_task_stat
+
+- name: Start the mirror agent scheduled task
+  ansible.windows.win_shell: |
+    Stop-ScheduledTask -TaskName ZeekMirrorAgent -ErrorAction SilentlyContinue
+    Start-ScheduledTask -TaskName ZeekMirrorAgent
+  changed_when: true
+  when: ludus_threat_hunting_task_stat.task_exists

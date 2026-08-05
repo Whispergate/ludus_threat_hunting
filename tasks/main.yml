@@ -1,0 +1,40 @@
+---
+- name: Validate the role mode
+  ansible.builtin.assert:
+    that:
+      - ludus_threat_hunting_mode in ["sensor", "agent"]
+    fail_msg: >-
+      ludus_threat_hunting_mode must be "sensor" or "agent"
+      (got: {{ ludus_threat_hunting_mode }}).
+    quiet: true
+
+- name: Configure a Windows agent
+  ansible.builtin.include_tasks:
+    file: agent_windows.yml
+  when: ansible_os_family == "Windows"
+
+- name: Configure a Linux host
+  when: ansible_os_family != "Windows"
+  block:
+    - name: Fail on unsupported platforms
+      ansible.builtin.assert:
+        that:
+          - ansible_os_family == "Debian"
+        fail_msg: >-
+          ludus_threat_hunting supports Debian, Ubuntu and Windows hosts only
+          (detected: {{ ansible_distribution }} {{ ansible_distribution_version }}).
+        quiet: true
+
+    - name: Resolve the sensor's own /24
+      ansible.builtin.set_fact:
+        ludus_threat_hunting_sensor_subnet: "{{ ansible_default_ipv4.address.split('.')[0:3] | join('.') }}.0/24"
+
+    - name: Configure a Linux agent
+      ansible.builtin.include_tasks:
+        file: agent_linux.yml
+      when: ludus_threat_hunting_mode == "agent"
+
+    - name: Configure the sensor
+      ansible.builtin.include_tasks:
+        file: sensor.yml
+      when: ludus_threat_hunting_mode == "sensor"

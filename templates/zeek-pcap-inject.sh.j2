@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+### Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+###
+### Reads a pcap stream on stdin and transmits it on the aggregation bridge,
+### where Zeek is sniffing. socat runs one copy of this per connected Windows
+### agent.
+###
+### editcap normalises the input first. Windows pktmon emits pcapng, and
+### neither libpcap nor tcpreplay reads pcapng -- classic pcap passes through
+### the same filter unchanged, so one code path handles both backends.
+###
+### --topspeed replays as fast as the stream arrives instead of honouring the
+### original inter-packet gaps; the gaps are already real-time here, and
+### pacing them a second time would add a growing delay.
+
+set -euo pipefail
+set -o pipefail
+
+exec /usr/bin/editcap -F pcap - - 2>/dev/null \
+    | /usr/bin/tcpreplay \
+        --intf1="{{ ludus_threat_hunting_mirror_bridge }}" \
+        --topspeed \
+        --quiet \
+        -

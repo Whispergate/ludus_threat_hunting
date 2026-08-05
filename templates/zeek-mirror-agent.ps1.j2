@@ -1,0 +1,139 @@
+<#
+    Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+
+    Streams a copy of this host's network traffic to the Ludus Zeek sensor.
+    The sensor injects whatever arrives on this socket onto its aggregation
+    bridge, where Zeek is sniffing.
+
+    Runs forever under a SYSTEM scheduled task; every failure path sleeps and
+    retries rather than exiting, so a sensor reboot or a network blip does not
+    permanently stop the agent.
+#>
+
+$ErrorActionPreference = 'Stop'
+
+$Sensor    = '{{ ludus_threat_hunting_sensor_ip }}'
+$Port      = {{ ludus_threat_hunting_agent_stream_port }}
+$WorkDir   = '{{ ludus_threat_hunting_agent_windows_path }}'
+$Backend   = '{{ ludus_threat_hunting_agent_windows_backend }}'
+$ChunkSecs = {{ ludus_threat_hunting_agent_pktmon_chunk_seconds }}
+$LogFile   = Join-Path $WorkDir 'agent.log'
+
+function Write-Log {
+    param([string]$Message)
+    $line = "{0} {1}" -f (Get-Date -Format 's'), $Message
+    Add-Content -Path $LogFile -Value $line -ErrorAction SilentlyContinue
+}
+
+function Send-Stream {
+    <#
+        Opens a TCP connection to the sensor and copies a stream into it.
+        The sensor reads a pcap/pcapng byte stream; closing the socket ends
+        that agent's replay cleanly.
+    #>
+    param([System.IO.Stream]$Source)
+
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $client.Connect($Sensor, $Port)
+        $network = $client.GetStream()
+        try {
+            $Source.CopyTo($network, 65536)
+            $network.Flush()
+        } finally {
+            $network.Dispose()
+        }
+    } finally {
+        $client.Dispose()
+    }
+}
+
+function Invoke-PktmonLoop {
+    <#
+        pktmon ships with Windows, so this backend needs nothing installed.
+        It cannot stream, so traffic is captured in fixed chunks, converted to
+        pcapng, and uploaded between captures.
+
+        Capturing and uploading never overlap, which is what keeps the agent
+        from recording its own upload to the sensor and amplifying it. The
+        cost is a blind window during each upload.
+    #>
+    $etl   = Join-Path $WorkDir 'capture.etl'
+    $pcap  = Join-Path $WorkDir 'capture.pcapng'
+
+    while ($true) {
+        try {
+            Remove-Item $etl, $pcap -Force -ErrorAction SilentlyContinue
+            & pktmon stop 2>&1 | Out-Null
+
+            # --pkt-size 0 keeps whole packets; truncated payloads would break
+            # Zeek's protocol analyzers and RITA's data size scoring.
+            & pktmon start --capture --pkt-size 0 --file-name $etl --file-size 512 2>&1 | Out-Null
+            Start-Sleep -Seconds $ChunkSecs
+            & pktmon stop 2>&1 | Out-Null
+
+            if (-not (Test-Path $etl)) {
+                Write-Log "pktmon produced no capture file"
+                Start-Sleep -Seconds 10
+                continue
+            }
+
+            & pktmon etl2pcap $etl --out $pcap 2>&1 | Out-Null
+            if (-not (Test-Path $pcap)) {
+                Write-Log "etl2pcap produced no output"
+                Start-Sleep -Seconds 10
+                continue
+            }
+
+            $fs = [System.IO.File]::OpenRead($pcap)
+            try { Send-Stream -Source $fs } finally { $fs.Dispose() }
+        } catch {
+            Write-Log "pktmon cycle failed: $($_.Exception.Message)"
+            Start-Sleep -Seconds 15
+        }
+    }
+}
+
+function Invoke-DumpcapLoop {
+    <#
+        Continuous live stream via Npcap. Lower latency than pktmon and no
+        blind window, but the capture is running while the upload is in
+        flight, so the BPF filter below must exclude the stream itself.
+    #>
+    $dumpcap = '{{ ludus_threat_hunting_agent_dumpcap_path }}'
+    $filter  = "not (host $Sensor and tcp port $Port)"
+{% if ludus_threat_hunting_agent_capture_filter | length > 0 %}
+    $filter  = "($filter) and ({{ ludus_threat_hunting_agent_capture_filter }})"
+{% endif %}
+
+    while ($true) {
+        $proc = $null
+        try {
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName               = $dumpcap
+            $psi.Arguments              = "-i {{ ludus_threat_hunting_agent_windows_interface }} -w - -q -f `"$filter`""
+            $psi.RedirectStandardOutput = $true
+            $psi.UseShellExecute        = $false
+            $psi.CreateNoWindow         = $true
+
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            Send-Stream -Source $proc.StandardOutput.BaseStream
+        } catch {
+            Write-Log "dumpcap stream failed: $($_.Exception.Message)"
+            Start-Sleep -Seconds 15
+        } finally {
+            if ($proc -and -not $proc.HasExited) {
+                $proc.Kill()
+            }
+        }
+    }
+}
+
+New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+Write-Log "Starting mirror agent: backend=$Backend sensor=${Sensor}:${Port}"
+
+if ($Backend -eq 'dumpcap') {
+    Invoke-DumpcapLoop
+} else {
+    Invoke-PktmonLoop
+}

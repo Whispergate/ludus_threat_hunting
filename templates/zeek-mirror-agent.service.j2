@@ -1,0 +1,14 @@
+### Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+[Unit]
+Description=Mirror this host's traffic to the Zeek sensor ({{ ludus_threat_hunting_sensor_ip }})
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/zeek-mirror-agent up
+ExecStop=/usr/local/bin/zeek-mirror-agent down
+
+[Install]
+WantedBy=multi-user.target

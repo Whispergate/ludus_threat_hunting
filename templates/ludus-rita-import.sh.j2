@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+### Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+###
+### Imports one rotated hour of Zeek logs into RITA.
+###
+### zeekctl rotates every hour into $LOG_ROOT/YYYY-MM-DD/, naming files like
+### conn.14:00:00-15:00:00.log.gz. RITA's import takes a *directory*, so to
+### import a single hour we hardlink that hour's files into a scratch
+### directory and point RITA at it. Hardlinks keep this free regardless of
+### capture volume, as long as the scratch directory shares a filesystem with
+### the logs -- which is why it lives under the log root.
+
+set -euo pipefail
+
+LOG_ROOT="{{ ludus_threat_hunting_zeek_prefix }}/logs"
+STAGE_ROOT="${LOG_ROOT}/.rita-staging"
+DATABASE="{{ ludus_threat_hunting_rita_database }}"
+RITA="/usr/local/bin/rita"
+{% if ludus_threat_hunting_rita_import_rolling %}
+# Rolling datasets are what enable RITA's first-seen scoring. Only valid for
+# logs coming off a live sensor.
+RITA_FLAGS=(--rolling)
+{% else %}
+RITA_FLAGS=()
+{% endif %}
+
+TARGET_DAY="$(date -d '1 hour ago' '+%Y-%m-%d')"
+TARGET_HOUR="$(date -d '1 hour ago' '+%H')"
+SRC="${LOG_ROOT}/${TARGET_DAY}"
+
+if [[ ! -d "$SRC" ]]; then
+    echo "No rotated log directory at ${SRC} yet; nothing to import."
+    exit 0
+fi
+
+mkdir -p "$STAGE_ROOT"
+
+# Reap scratch directories orphaned by a killed run.
+find "$STAGE_ROOT" -mindepth 1 -maxdepth 1 -type d -mmin +180 -exec rm -rf {} + 2>/dev/null || true
+
+STAGE="$(mktemp -d "${STAGE_ROOT}/${TARGET_DAY}_${TARGET_HOUR}.XXXXXX")"
+trap 'rm -rf "$STAGE"' EXIT
+
+shopt -s nullglob
+files=(
+    "${SRC}"/*."${TARGET_HOUR}:00:00"-*.log.gz
+    "${SRC}"/*."${TARGET_HOUR}:00:00"-*.log
+)
+
+# Counted via the positional parameters rather than bash's array-length
+# syntax. This file is an Ansible template, and a dollar-brace-hash sequence
+# opens a Jinja comment, which breaks rendering.
+set -- "${files[@]}"
+file_count=$#
+
+if (( file_count == 0 )); then
+    echo "No logs for ${TARGET_DAY} ${TARGET_HOUR}:00 in ${SRC}; nothing to import."
+    exit 0
+fi
+
+cp -l "${files[@]}" "${STAGE}/" 2>/dev/null || cp "${files[@]}" "${STAGE}/"
+
+echo "Importing ${file_count} log file(s) from ${TARGET_DAY} ${TARGET_HOUR}:00 into database '${DATABASE}'."
+"$RITA" import --database="$DATABASE" --logs="$STAGE" ${RITA_FLAGS[@]+"${RITA_FLAGS[@]}"}

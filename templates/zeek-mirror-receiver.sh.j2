@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+### Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+###
+### Builds the fan-in path that agent traffic arrives on.
+###
+### A bridge with no IP acts as the aggregation point. Each Linux agent gets a
+### dedicated gretap device enslaved to it; the kernel decapsulates that
+### agent's GRE and the original frames appear on the bridge. Windows agents
+### stream pcap instead, which zeek-pcap-receiver injects onto the same bridge.
+### Zeek sniffs only the bridge, so every agent lands in one dataset.
+
+set -euo pipefail
+
+BRIDGE="{{ ludus_threat_hunting_mirror_bridge }}"
+LOCAL_IP="{{ ansible_default_ipv4.address }}"
+DEV_PREFIX="zmir"
+AGENTS=({% for agent in ludus_threat_hunting_mirror_gre_agents %}"{{ agent }}" {% endfor %})
+
+ip_link_exists() {
+    ip link show "$1" >/dev/null 2>&1
+}
+
+up() {
+    if ! ip_link_exists "$BRIDGE"; then
+        ip link add name "$BRIDGE" type bridge
+    fi
+    # A sink bridge: no STP, no forwarding delay, no IP. It exists only so
+    # that traffic from several sources shows up on one sniffable device.
+    ip link set "$BRIDGE" type bridge stp_state 0 forward_delay 0
+    ip link set "$BRIDGE" up
+    ip link set "$BRIDGE" promisc on
+
+    # Reap receive devices left over from a previous, longer agent list.
+    local dev
+    # cut on "@": tunnel devices are reported as "zmir0@NONE", and the suffix
+    # would otherwise end up in the index.
+    for dev in $(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep "^${DEV_PREFIX}" || true); do
+        rm_if_stale "$dev"
+    done
+
+    local index=0 agent
+    for agent in ${AGENTS[@]+"${AGENTS[@]}"}; do
+        dev="${DEV_PREFIX}${index}"
+        if ! ip_link_exists "$dev"; then
+            # nopmtudisc/ignore-df: a mirrored 1500-byte frame plus GRE
+            # headers exceeds the underlay MTU. Fragment the outer packet
+            # instead of dropping the mirror.
+            ip link add name "$dev" type gretap \
+                local "$LOCAL_IP" remote "$agent" nopmtudisc ignore-df
+        fi
+        ip link set "$dev" master "$BRIDGE"
+        ip link set "$dev" up
+        ip link set "$dev" promisc on
+        index=$((index + 1))
+    done
+
+    echo "Mirror receiver up: bridge ${BRIDGE}, ${index} GRE agent(s)."
+}
+
+# Delete a zmirN device whose index is past the end of the current agent list.
+rm_if_stale() {
+    local dev="$1" index
+    index="${dev#"$DEV_PREFIX"}"
+    [[ "$index" =~ ^[0-9]+$ ]] || return 0
+    set -- ${AGENTS[@]+"${AGENTS[@]}"}
+    if (( index >= $# )); then
+        ip link del "$dev" 2>/dev/null || true
+    fi
+}
+
+down() {
+    local dev
+    # cut on "@": tunnel devices are reported as "zmir0@NONE", and the suffix
+    # would otherwise end up in the index.
+    for dev in $(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep "^${DEV_PREFIX}" || true); do
+        ip link del "$dev" 2>/dev/null || true
+    done
+    ip link del "$BRIDGE" 2>/dev/null || true
+    echo "Mirror receiver down."
+}
+
+case "${1:-up}" in
+    up)   up ;;
+    down) down ;;
+    *)    echo "usage: $(basename "$0") [up|down]" >&2; exit 2 ;;
+esac

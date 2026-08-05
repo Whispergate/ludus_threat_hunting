@@ -1,0 +1,41 @@
+---
+dependencies: []
+
+galaxy_info:
+  role_name: ludus_threat_hunting
+  author: Whispergate
+  description: >-
+    An Ansible Role that installs Zeek and RITA on a Debian or Ubuntu host to
+    build a network threat hunting sensor for a Ludus range, schedules rolling
+    imports of Zeek logs into RITA, and optionally installs traffic mirroring
+    agents on Linux and Windows victim machines.
+  company: ""
+  license: BSD-2-Clause
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+    # Agent mode only, and in practice Windows 10 2004+ / Server 2022+ for the
+    # default pktmon backend. Galaxy's schema only accepts "all" here.
+    - name: Windows
+      versions:
+        - all
+  galaxy_tags:
+    - ludus
+    - zeek
+    - rita
+    - threathunting
+    - networksecuritymonitoring
+    - dfir
+    - blueteam
+
+collections:
+  # Windows agent mode only; the sensor and Linux agent use ansible.builtin.
+  - ansible.windows
+  - community.windows

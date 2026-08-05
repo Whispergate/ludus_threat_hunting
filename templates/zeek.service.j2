@@ -1,0 +1,23 @@
+### Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+[Unit]
+Description=Zeek Network Security Monitor (managed by zeekctl)
+Documentation=https://docs.zeek.org
+Wants=network-online.target
+After=network-online.target
+{% if ludus_threat_hunting_zeek_tune_interface %}
+After=zeek-sensor-iface.service
+Requires=zeek-sensor-iface.service
+{% endif %}
+
+[Service]
+# zeekctl forks and supervises the capture processes itself, so systemd only
+# needs to drive deploy/stop and remember that the unit is "active".
+Type=oneshot
+RemainAfterExit=yes
+ExecStart={{ ludus_threat_hunting_zeek_prefix }}/bin/zeekctl deploy
+ExecReload={{ ludus_threat_hunting_zeek_prefix }}/bin/zeekctl deploy
+ExecStop={{ ludus_threat_hunting_zeek_prefix }}/bin/zeekctl stop
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

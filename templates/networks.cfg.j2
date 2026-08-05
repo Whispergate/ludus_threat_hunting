@@ -1,0 +1,8 @@
+### Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+###
+### Networks listed here populate Site::local_nets, which is what sets
+### local_orig / local_resp in conn.log.
+
+{% for network in ludus_threat_hunting_local_networks %}
+{{ network }}	Local network
+{% endfor %}

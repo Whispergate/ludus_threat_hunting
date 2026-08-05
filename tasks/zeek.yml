@@ -1,0 +1,170 @@
+---
+# Zeek is installed from the openSUSE Build Service repository maintained by
+# the Zeek project (security:zeek). The packages install to /opt/zeek and ship
+# zeekctl, which handles supervision and hourly log rotation into
+# /opt/zeek/logs/YYYY-MM-DD/ -- exactly the layout RITA wants to import.
+
+- name: Set the OBS repository directory for this distribution
+  ansible.builtin.set_fact:
+    ludus_threat_hunting_obs_dir: >-
+      {{ 'Debian_' ~ ansible_distribution_major_version
+         if ansible_distribution == 'Debian'
+         else 'xUbuntu_' ~ ansible_distribution_version }}
+
+- name: Install Zeek repository prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - ethtool
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the apt keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Download the Zeek apt signing key
+  ansible.builtin.get_url:
+    url: "https://download.opensuse.org/repositories/security:/zeek/{{ ludus_threat_hunting_obs_dir }}/Release.key"
+    dest: /etc/apt/keyrings/zeek.asc
+    mode: "0644"
+    force: false
+
+- name: Add the Zeek apt repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [signed-by=/etc/apt/keyrings/zeek.asc]
+      https://download.opensuse.org/repositories/security:/zeek/{{ ludus_threat_hunting_obs_dir }}/ /
+    filename: zeek
+    state: present
+    update_cache: true
+
+- name: Install Zeek
+  ansible.builtin.apt:
+    name: "{{ ludus_threat_hunting_zeek_package }}"
+    state: present
+
+- name: Add Zeek to the system PATH
+  ansible.builtin.copy:
+    dest: /etc/profile.d/zeek.sh
+    content: "export PATH=\"{{ ludus_threat_hunting_zeek_prefix }}/bin:$PATH\"\n"
+    mode: "0644"
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+- name: Write node.cfg
+  ansible.builtin.template:
+    src: node.cfg.j2
+    dest: "{{ ludus_threat_hunting_zeek_prefix }}/etc/node.cfg"
+    mode: "0644"
+  notify: Deploy zeek
+
+- name: Write networks.cfg
+  ansible.builtin.template:
+    src: networks.cfg.j2
+    dest: "{{ ludus_threat_hunting_zeek_prefix }}/etc/networks.cfg"
+    mode: "0644"
+  notify: Deploy zeek
+
+# local.zeek is owned by the package and carries the upstream default policy
+# set. Rather than clobber it, drop our additions in a separate script and
+# @load it from the end of local.zeek.
+- name: Write the Ludus site script
+  ansible.builtin.template:
+    src: ludus-threat-hunting.zeek.j2
+    dest: "{{ ludus_threat_hunting_zeek_prefix }}/share/zeek/site/ludus-threat-hunting.zeek"
+    mode: "0644"
+  notify: Deploy zeek
+
+- name: Load the Ludus site script from local.zeek
+  ansible.builtin.lineinfile:
+    path: "{{ ludus_threat_hunting_zeek_prefix }}/share/zeek/site/local.zeek"
+    line: "@load ludus-threat-hunting"
+    insertafter: EOF
+    state: present
+  notify: Deploy zeek
+
+- name: Configure zeekctl
+  ansible.builtin.lineinfile:
+    path: "{{ ludus_threat_hunting_zeek_prefix }}/etc/zeekctl.cfg"
+    regexp: "^{{ item.key }}\\s*="
+    line: "{{ item.key }} = {{ item.value }}"
+    state: present
+  loop:
+    - {key: LogRotationInterval, value: "{{ ludus_threat_hunting_zeek_log_rotation_interval }}"}
+    - {key: CompressLogs, value: "1"}
+    - {key: LogDir, value: "{{ ludus_threat_hunting_zeek_prefix }}/logs"}
+  loop_control:
+    label: "{{ item.key }}"
+  notify: Deploy zeek
+
+# ---------------------------------------------------------------------------
+# Interface tuning
+# ---------------------------------------------------------------------------
+
+# NIC offloads (GRO/LRO/TSO/GSO) hand libpcap re-assembled super-frames. Zeek
+# then records byte counts and packet timings that never appeared on the wire,
+# which directly corrupts RITA's data size and timestamp beacon subscores.
+- name: Install the interface tuning unit
+  ansible.builtin.template:
+    src: zeek-sensor-iface.service.j2
+    dest: /etc/systemd/system/zeek-sensor-iface.service
+    mode: "0644"
+  when: ludus_threat_hunting_zeek_tune_interface
+  notify: Restart zeek sensor iface
+
+- name: Enable the interface tuning unit
+  ansible.builtin.systemd:
+    name: zeek-sensor-iface.service
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: ludus_threat_hunting_zeek_tune_interface
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+
+- name: Install the zeek systemd unit
+  ansible.builtin.template:
+    src: zeek.service.j2
+    dest: /etc/systemd/system/zeek.service
+    mode: "0644"
+  notify: Deploy zeek
+
+- name: Enable and start zeek
+  ansible.builtin.systemd:
+    name: zeek.service
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# zeekctl cron restarts crashed workers, expires logs past LogExpireInterval,
+# and warns on disk pressure. Without it a crashed sensor stays down silently.
+- name: Schedule zeekctl cron
+  ansible.builtin.cron:
+    name: zeekctl cron
+    minute: "*/5"
+    user: root
+    job: "{{ ludus_threat_hunting_zeek_prefix }}/bin/zeekctl cron"
+    state: "{{ 'present' if ludus_threat_hunting_zeek_enable_cron else 'absent' }}"
+
+- name: Check whether zeek is running
+  ansible.builtin.command: "{{ ludus_threat_hunting_zeek_prefix }}/bin/zeekctl status"
+  register: ludus_threat_hunting_zeek_status
+  changed_when: false
+  failed_when: false
+
+- name: Deploy zeek if it is not running
+  ansible.builtin.command: "{{ ludus_threat_hunting_zeek_prefix }}/bin/zeekctl deploy"
+  register: ludus_threat_hunting_zeek_deploy
+  changed_when: true
+  when: >-
+    ludus_threat_hunting_zeek_status.rc != 0
+    or 'running' not in ludus_threat_hunting_zeek_status.stdout

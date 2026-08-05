@@ -1,0 +1,13 @@
+### Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+[Unit]
+Description=Import the previous hour of Zeek logs into RITA
+Documentation=https://github.com/activecm/rita
+After=docker.service zeek.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# RITA refuses to start if another import is already running. flock keeps a
+# slow import from colliding with the next tick instead of failing it.
+ExecStart=/usr/bin/flock -n /run/ludus-rita-import.lock /usr/local/bin/ludus-rita-import
+TimeoutStartSec=3600

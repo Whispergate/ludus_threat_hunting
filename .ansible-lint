@@ -1,0 +1,6 @@
+---
+# tasks/download_file.yml is copied verbatim from the Ludus role template and
+# is marked "You should not modify this file!" upstream. Its lint violations
+# are not ours to fix.
+exclude_paths:
+  - tasks/download_file.yml

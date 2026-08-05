@@ -1,0 +1,88 @@
+---
+# Fan-in point for agent traffic.
+#
+# Every agent's mirrored frames are delivered onto one bridge, and Zeek sniffs
+# that bridge. This keeps a single Zeek instance, a single log directory, and
+# a single RITA dataset no matter how many agents are attached.
+#
+#   linux agent  --gretap--> zmir<n> --enslaved--> zeekmon0 --> zeek
+#   windows agent --pcap/tcp--> socat --> tcpreplay -i zeekmon0 --> zeek
+
+- name: Install mirror receiver dependencies
+  ansible.builtin.apt:
+    name:
+      - iproute2
+      - bridge-utils
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install pcap stream receiver dependencies
+  ansible.builtin.apt:
+    name:
+      - socat
+      - tcpreplay
+      # editcap, for converting pktmon's pcapng into classic pcap
+      - wireshark-common
+    state: present
+  when: ludus_threat_hunting_mirror_accept_pcap_stream
+  environment:
+    # wireshark-common asks whether non-root users may capture. Answer it
+    # up front so the install does not hang on debconf.
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Install the mirror receiver setup script
+  ansible.builtin.template:
+    src: zeek-mirror-receiver.sh.j2
+    dest: /usr/local/bin/zeek-mirror-receiver
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart mirror receiver
+
+- name: Install the mirror receiver unit
+  ansible.builtin.template:
+    src: zeek-mirror-receiver.service.j2
+    dest: /etc/systemd/system/zeek-mirror-receiver.service
+    mode: "0644"
+  notify: Restart mirror receiver
+
+- name: Enable and start the mirror receiver
+  ansible.builtin.systemd:
+    name: zeek-mirror-receiver.service
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# Zeek is configured to sniff the bridge, so it must exist before zeekctl
+# deploys. Flushing here rather than at the end of the play guarantees the
+# ordering.
+- name: Apply mirror receiver changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Install the pcap stream injector
+  ansible.builtin.template:
+    src: zeek-pcap-inject.sh.j2
+    dest: /usr/local/bin/zeek-pcap-inject
+    owner: root
+    group: root
+    mode: "0755"
+  when: ludus_threat_hunting_mirror_accept_pcap_stream
+  notify: Restart pcap receiver
+
+- name: Install the pcap stream receiver unit
+  ansible.builtin.template:
+    src: zeek-pcap-receiver.service.j2
+    dest: /etc/systemd/system/zeek-pcap-receiver.service
+    mode: "0644"
+  when: ludus_threat_hunting_mirror_accept_pcap_stream
+  notify: Restart pcap receiver
+
+- name: Enable and start the pcap stream receiver
+  ansible.builtin.systemd:
+    name: zeek-pcap-receiver.service
+    enabled: "{{ ludus_threat_hunting_mirror_accept_pcap_stream }}"
+    state: "{{ 'started' if ludus_threat_hunting_mirror_accept_pcap_stream else 'stopped' }}"
+    daemon_reload: true
+  failed_when: false
+  when: ludus_threat_hunting_mirror_accept_pcap_stream

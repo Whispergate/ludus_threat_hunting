@@ -1,0 +1,15 @@
+### Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+[Unit]
+Description=Zeek mirror receiver (aggregation bridge and agent GRE endpoints)
+Wants=network-online.target
+After=network-online.target
+Before=zeek.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/zeek-mirror-receiver up
+ExecStop=/usr/local/bin/zeek-mirror-receiver down
+
+[Install]
+WantedBy=multi-user.target

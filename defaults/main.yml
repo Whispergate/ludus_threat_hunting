@@ -1,0 +1,208 @@
+---
+# All variables are prefixed with the role name to avoid collisions with
+# other Ludus roles.
+
+# ---------------------------------------------------------------------------
+# Role mode
+# ---------------------------------------------------------------------------
+
+# sensor -> Zeek + RITA analysis host (Debian/Ubuntu only)
+# agent  -> victim machine that mirrors a copy of its own traffic to a sensor
+#           (Debian/Ubuntu or Windows)
+ludus_threat_hunting_mode: sensor
+
+# ---------------------------------------------------------------------------
+# Component toggles (sensor mode)
+# ---------------------------------------------------------------------------
+
+# Install Docker Engine + the compose v2 plugin. RITA requires both.
+# Set to false if Docker is already installed by another role.
+ludus_threat_hunting_install_docker: true
+
+# Install and configure Zeek (the sensor).
+ludus_threat_hunting_install_zeek: true
+
+# Install and configure RITA (the analysis engine).
+ludus_threat_hunting_install_rita: true
+
+# ---------------------------------------------------------------------------
+# Zeek
+# ---------------------------------------------------------------------------
+
+# Package to install from the security:zeek OBS repository.
+#   zeek      -> current feature release
+#   zeek-lts  -> current long term support release (recommended)
+#   zeek-7.0  -> a specific pinned feature branch
+ludus_threat_hunting_zeek_package: zeek-lts
+
+# Install prefix used by the OBS packages. Only change this if you build Zeek
+# yourself; the packages are hardcoded to /opt/zeek.
+ludus_threat_hunting_zeek_prefix: /opt/zeek
+
+# Interface Zeek sniffs. Empty string means "the VM's default route
+# interface", which only sees traffic to/from this VM unless the hypervisor
+# is mirroring a port to it. See the README for SPAN/mirror setup.
+ludus_threat_hunting_zeek_interface: ""
+
+# Put the sniffing interface in promiscuous mode and disable NIC offloads
+# (GRO/LRO/TSO/GSO). Offloads hand Zeek re-assembled super-packets, which
+# corrupts conn.log byte counts and confuses RITA's data size scoring.
+ludus_threat_hunting_zeek_tune_interface: true
+
+# Networks Zeek considers local (written to networks.cfg). Empty means
+# "derive from the sensor's own /24".
+ludus_threat_hunting_zeek_local_networks: []
+
+# Log rotation interval in seconds. RITA imports one rotated chunk at a time,
+# so this should stay at 3600 unless you also change the import timer.
+ludus_threat_hunting_zeek_log_rotation_interval: 3600
+
+# Emit JSON logs instead of Zeek's default TSV. RITA reads both.
+ludus_threat_hunting_zeek_json_logs: false
+
+# Extra @load lines appended to local.zeek, e.g.
+#   - policy/protocols/ssl/ssl-log-ext
+#   - policy/frameworks/notice/community-id
+ludus_threat_hunting_zeek_extra_scripts: []
+
+# Run `zeekctl cron` every 5 minutes. Restarts crashed workers, expires old
+# logs, and reports disk pressure.
+ludus_threat_hunting_zeek_enable_cron: true
+
+# ---------------------------------------------------------------------------
+# RITA
+# ---------------------------------------------------------------------------
+
+ludus_threat_hunting_rita_version: v5.1.2
+
+# Optional checksum for the release tarball, e.g. "sha256:abc123...".
+# Leave undefined to skip verification.
+# ludus_threat_hunting_rita_checksum: "sha256:..."
+
+# Dataset name RITA imports into and `rita view` reads from.
+ludus_threat_hunting_rita_database: ludus
+
+# RITA drops internal->internal connections at import time. In a Ludus range
+# every host is RFC1918, so RITA's stock defaults (all of 10/8, 172.16/12,
+# 192.168/16) discard essentially all range traffic.
+#
+# The default below is the sensor's own /24 only. Beacons from range hosts to
+# a C2 VM on another VLAN are then internal->external and get scored.
+#
+# If your C2 lives on the real internet, use RITA's stock list instead:
+#   ludus_threat_hunting_rita_internal_subnets:
+#     - 10.0.0.0/8
+#     - 172.16.0.0/12
+#     - 192.168.0.0/16
+#     - fd00::/8
+ludus_threat_hunting_rita_internal_subnets: []
+
+# Always keep connections touching these, overriding the filters above.
+ludus_threat_hunting_rita_always_included_subnets: []
+ludus_threat_hunting_rita_always_included_domains: []
+
+# Drop connections touching these at import time. Useful for muting the Ludus
+# router, DNS server, and update mirrors.
+ludus_threat_hunting_rita_never_included_subnets: []
+ludus_threat_hunting_rita_never_included_domains: []
+
+# Drop inbound external->internal connections. Leave true for C2 hunting;
+# set false if you also want to see scanning against the range.
+ludus_threat_hunting_rita_filter_external_to_internal: true
+
+# Threat intel feeds. One IP or domain per line at the far end.
+ludus_threat_hunting_rita_online_feeds:
+  - https://feodotracker.abuse.ch/downloads/ipblocklist.txt
+
+# Local threat intel files dropped into /etc/rita/threat_intel_feeds/.
+# Each entry: {name: my-c2.txt, content: "10.2.10.99\nevil.example.com\n"}
+ludus_threat_hunting_rita_custom_feeds: []
+
+# Phone home to check for a newer RITA release on every run.
+ludus_threat_hunting_rita_update_check: false
+
+# Minimum unique connections before a pair is analyzed for beaconing.
+# RITA ships 4. Short-lived range captures may need it lower.
+ludus_threat_hunting_rita_beacon_unique_connection_threshold: 4
+
+# ---------------------------------------------------------------------------
+# Automated import
+# ---------------------------------------------------------------------------
+
+# Install a systemd timer that imports each rotated hour of Zeek logs.
+ludus_threat_hunting_rita_import_enabled: true
+
+# systemd OnCalendar expression. The default fires 10 minutes past the hour,
+# giving zeekctl time to finish rotating and compressing the previous hour.
+ludus_threat_hunting_rita_import_oncalendar: "*-*-* *:10:00"
+
+# Import as a rolling dataset. Required for RITA's first-seen scoring, and
+# only valid for logs from a live sensor.
+ludus_threat_hunting_rita_import_rolling: true
+
+# ---------------------------------------------------------------------------
+# Mirror receiver (sensor mode)
+# ---------------------------------------------------------------------------
+# When enabled the sensor builds a bridge, attaches one receive interface per
+# agent to it, and points Zeek at the bridge instead of its own NIC. Every
+# agent's mirrored traffic then lands in one Zeek instance and one RITA
+# dataset.
+
+ludus_threat_hunting_mirror_enabled: false
+
+# Bridge Zeek sniffs when the mirror receiver is enabled. Interface names are
+# capped at 15 characters, and per-agent devices are derived from this.
+ludus_threat_hunting_mirror_bridge: zeekmon0
+
+# IP addresses of Linux agents that will send GRE-encapsulated mirrors here.
+# Each gets a dedicated gretap receive interface.
+ludus_threat_hunting_mirror_gre_agents: []
+
+# Accept pcap streams from Windows agents. One listener serves all of them.
+ludus_threat_hunting_mirror_accept_pcap_stream: false
+ludus_threat_hunting_mirror_pcap_stream_port: 4789
+
+# ---------------------------------------------------------------------------
+# Agent mode
+# ---------------------------------------------------------------------------
+
+# IP of the sensor to mirror to. Required when mode is agent.
+ludus_threat_hunting_sensor_ip: ""
+
+# Interface to mirror. Empty means the default route interface.
+ludus_threat_hunting_agent_interface: ""
+
+# GRE tunnel MTU on Linux agents. A mirrored 1500-byte frame plus GRE headers
+# exceeds the underlay MTU, so the tunnel is created with nopmtudisc/ignore-df
+# and the outer packet is fragmented. Lower this if the range path MTU is
+# smaller than 1500.
+ludus_threat_hunting_agent_gre_mtu: 1462
+
+# Windows agents stream pcap over TCP to this port on the sensor.
+ludus_threat_hunting_agent_stream_port: 4789
+
+# Capture backend on Windows agents.
+#   pktmon  - built into Windows (10 2004+ / Server 2022+), nothing to
+#             install. Captures in fixed chunks and uploads between them, so
+#             there is a short blind window per cycle.
+#   dumpcap - continuous live stream with no blind window, but requires
+#             Npcap/Wireshark to already be present. This role will not
+#             install it: Npcap's free installer has no silent mode.
+ludus_threat_hunting_agent_windows_backend: pktmon
+
+# Working directory on Windows agents (script, capture spool, agent log).
+ludus_threat_hunting_agent_windows_path: C:\ludus\threat_hunting
+
+# Seconds of traffic per pktmon capture cycle. Lower means fresher data in
+# RITA and a shorter blind window, at the cost of more upload churn.
+ludus_threat_hunting_agent_pktmon_chunk_seconds: 60
+
+# dumpcap backend only.
+ludus_threat_hunting_agent_dumpcap_path: C:\Program Files\Wireshark\dumpcap.exe
+# dumpcap interface number or name. Run `dumpcap -D` on the agent to list.
+ludus_threat_hunting_agent_windows_interface: 1
+
+# Extra BPF appended to the Windows dumpcap capture filter. The filter that
+# excludes the agent's own stream to the sensor is always applied on top of
+# this -- without it the capture would record its own upload and amplify.
+ludus_threat_hunting_agent_capture_filter: ""

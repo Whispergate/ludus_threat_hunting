@@ -1,0 +1,57 @@
+---
+# Sensor mode: Zeek + RITA, plus an optional mirror receiver that fans traffic
+# in from agent VMs.
+
+- name: Resolve the sniffing interface
+  ansible.builtin.set_fact:
+    # With the mirror receiver on, Zeek watches the bridge that every agent's
+    # traffic lands on rather than the sensor's own NIC.
+    ludus_threat_hunting_iface: >-
+      {{ ludus_threat_hunting_mirror_bridge
+         if ludus_threat_hunting_mirror_enabled
+         else (ludus_threat_hunting_zeek_interface
+               if ludus_threat_hunting_zeek_interface | length > 0
+               else ansible_default_ipv4.interface) }}
+
+- name: Resolve Zeek local networks
+  ansible.builtin.set_fact:
+    ludus_threat_hunting_local_networks: >-
+      {{ ludus_threat_hunting_zeek_local_networks
+         if ludus_threat_hunting_zeek_local_networks | length > 0
+         else [ludus_threat_hunting_sensor_subnet] }}
+
+- name: Resolve RITA internal subnets
+  ansible.builtin.set_fact:
+    ludus_threat_hunting_internal_subnets: >-
+      {{ ludus_threat_hunting_rita_internal_subnets
+         if ludus_threat_hunting_rita_internal_subnets | length > 0
+         else [ludus_threat_hunting_sensor_subnet] }}
+
+- name: Install Docker Engine
+  ansible.builtin.include_tasks:
+    file: docker.yml
+  when: ludus_threat_hunting_install_docker
+
+# The mirror receiver has to exist before zeekctl is told to sniff the bridge,
+# otherwise `zeekctl deploy` fails on a missing interface.
+- name: Set up the mirror receiver
+  ansible.builtin.include_tasks:
+    file: mirror_receiver.yml
+  when: ludus_threat_hunting_mirror_enabled
+
+- name: Install and configure Zeek
+  ansible.builtin.include_tasks:
+    file: zeek.yml
+  when: ludus_threat_hunting_install_zeek
+
+- name: Install and configure RITA
+  ansible.builtin.include_tasks:
+    file: rita.yml
+  when: ludus_threat_hunting_install_rita
+
+- name: Schedule rolling RITA imports
+  ansible.builtin.include_tasks:
+    file: import.yml
+  when:
+    - ludus_threat_hunting_install_rita
+    - ludus_threat_hunting_rita_import_enabled

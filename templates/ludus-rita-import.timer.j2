@@ -1,0 +1,13 @@
+### Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+[Unit]
+Description=Periodic RITA import of rotated Zeek logs
+
+[Timer]
+# Offset from the top of the hour so zeekctl has finished rotating and
+# compressing the hour this run is about to import.
+OnCalendar={{ ludus_threat_hunting_rita_import_oncalendar }}
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

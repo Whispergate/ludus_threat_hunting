@@ -1,0 +1,14 @@
+##! Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+##!
+##! Loaded from the end of local.zeek. RITA reads conn, open_conn, dns, http,
+##! ssl and ssl certificate logs; the stock local.zeek already produces all of
+##! them, so this file only carries opt-in changes.
+
+{% if ludus_threat_hunting_zeek_json_logs %}
+# JSON output. RITA reads both TSV and JSON, but JSON is roughly 2-3x larger
+# on disk for the same traffic.
+@load policy/tuning/json-logs
+{% endif %}
+{% for script in ludus_threat_hunting_zeek_extra_scripts %}
+@load {{ script }}
+{% endfor %}

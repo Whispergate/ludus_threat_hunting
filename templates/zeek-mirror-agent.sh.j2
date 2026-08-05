@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+### Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+###
+### Mirrors this host's traffic to the Zeek sensor.
+###
+### tc mirred clones every frame on the monitored interface into a gretap
+### tunnel whose far end is the sensor. Both directions are covered: an
+### ingress qdisc catches inbound frames, a root qdisc catches outbound.
+###
+### The egress side needs one guard. Once mirroring is on, the GRE packets
+### this script generates are themselves outbound traffic on the same
+### interface, so a naive matchall filter would mirror the mirror and the
+### host would drown in its own feedback. A higher-priority filter matches
+### GRE destined for the sensor and passes it through unmirrored.
+
+set -euo pipefail
+
+IFACE="{{ ludus_threat_hunting_iface }}"
+SENSOR_IP="{{ ludus_threat_hunting_sensor_ip }}"
+LOCAL_IP="{{ ansible_default_ipv4.address }}"
+TUNNEL="zmirtx"
+MTU="{{ ludus_threat_hunting_agent_gre_mtu }}"
+
+up() {
+    if ! ip link show "$TUNNEL" >/dev/null 2>&1; then
+        # nopmtudisc/ignore-df: a mirrored full-MTU frame plus GRE headers is
+        # larger than the underlay MTU. Fragment the outer packet rather than
+        # silently dropping the copy.
+        ip link add name "$TUNNEL" type gretap \
+            local "$LOCAL_IP" remote "$SENSOR_IP" nopmtudisc ignore-df
+    fi
+    ip link set "$TUNNEL" mtu "$MTU"
+    ip link set "$TUNNEL" up
+
+    # Start from a clean slate. `tc filter replace` cannot replace a u32
+    # filter without being given its handle, so re-running up() on top of an
+    # existing setup fails with EEXIST. Dropping the qdiscs takes their
+    # filters with them and makes this rerunnable.
+    clear_qdiscs
+
+    # Inbound.
+    tc qdisc add dev "$IFACE" handle ffff: ingress
+    tc filter add dev "$IFACE" parent ffff: prio 1 protocol all \
+        matchall action mirred egress mirror dev "$TUNNEL"
+
+    # Outbound. prio is a plain classful work-conserving qdisc; it does not
+    # shape or reorder, it just gives the filters somewhere to attach.
+    tc qdisc add dev "$IFACE" root handle 1: prio
+    # Priority 1: our own mirror traffic leaves untouched. gact "pass" is
+    # terminal, so matching frames never reach the mirror filter below.
+    #
+    # u32 rather than flower: flower rejects "gre" as an ip_proto name, and
+    # parses a bare number as hexadecimal -- "ip_proto 47" silently compiles
+    # to protocol 0x47 (71), matches nothing, and the mirror ends up feeding
+    # on itself. u32's protocol match is unambiguous; verify with
+    # `tc filter show`, which should print "match 002f0000/00ff0000".
+    tc filter add dev "$IFACE" parent 1: prio 1 protocol ip u32 \
+        match ip protocol 47 0xff \
+        match ip dst "${SENSOR_IP}/32" \
+        action pass
+    # Priority 2: everything else gets copied.
+    tc filter add dev "$IFACE" parent 1: prio 2 protocol all \
+        matchall action mirred egress mirror dev "$TUNNEL"
+
+    echo "Mirroring ${IFACE} to ${SENSOR_IP} via ${TUNNEL}."
+}
+
+clear_qdiscs() {
+    tc qdisc del dev "$IFACE" ingress 2>/dev/null || true
+    tc qdisc del dev "$IFACE" root 2>/dev/null || true
+}
+
+down() {
+    clear_qdiscs
+    ip link del "$TUNNEL" 2>/dev/null || true
+    echo "Mirroring stopped."
+}
+
+case "${1:-up}" in
+    up)   up ;;
+    down) down ;;
+    *)    echo "usage: $(basename "$0") [up|down]" >&2; exit 2 ;;
+esac

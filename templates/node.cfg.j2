@@ -1,0 +1,11 @@
+### Managed by the ludus_threat_hunting Ansible role -- local edits are lost.
+###
+### Standalone layout: one Zeek process sniffing one interface. This is the
+### right shape for a Ludus range sensor; a cluster layout only pays off above
+### roughly 1 Gbps of sustained traffic and needs an AF_PACKET or PF_RING
+### load balancer plugin that these packages do not ship.
+
+[zeek]
+type=standalone
+host=localhost
+interface={{ ludus_threat_hunting_iface }}
