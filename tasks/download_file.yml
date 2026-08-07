@@ -39,14 +39,14 @@
     - name: Check if file exists on Ludus host
       ansible.builtin.stat:
         path: "{{ ludus_install_path | default('/opt/ludus') }}/resources/{{ role_name }}/{{ ludus_download_file_name }}"
-        checksum_algorithm: "{{ ludus_download_file_checksum.split(':')[0] if ludus_download_file_checksum is defined else 'sha1' }}"
+        checksum_algorithm: "{{ ludus_download_file_checksum.split(':')[0] if (ludus_download_file_checksum is defined and ludus_download_file_checksum is string and ':' in ludus_download_file_checksum) else 'sha1' }}"
       delegate_to: localhost
       register: file_check
 
     - name: Check file checksum if file exists
       ansible.builtin.set_fact:
         existing_file_checksum_correct: "{{ file_check.stat.checksum == ludus_download_file_checksum.split(':')[1] }}"
-      when: file_check.stat.exists and ludus_download_file_checksum is defined
+      when: file_check.stat.exists and ludus_download_file_checksum is defined and ludus_download_file_checksum is string and ':' in ludus_download_file_checksum
 
     - name: Downloading file to Ludus host
       ansible.builtin.get_url:
