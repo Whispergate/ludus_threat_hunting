@@ -122,7 +122,7 @@ ludus_threat_hunting_rita_custom_feeds: []
 ludus_threat_hunting_rita_update_check: false
 
 # Minimum unique connections before a pair is analyzed for beaconing.
-# RITA ships 4. Short-lived range captures may need it lower.
+# RITA enforces a minimum of 4 (gte=4 in the Go validation).
 ludus_threat_hunting_rita_beacon_unique_connection_threshold: 4
 
 # ---------------------------------------------------------------------------

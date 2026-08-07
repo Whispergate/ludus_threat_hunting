@@ -445,12 +445,12 @@ ludus:
       # Mute the range router so it does not dominate every finding
       ludus_threat_hunting_rita_never_included_subnets:
         - "{{ ludus_dns_server }}/32"
-      # Short lab captures rarely reach RITA's default of 4
-      ludus_threat_hunting_rita_beacon_unique_connection_threshold: 3
+      # RITA enforces a minimum of 4 for this value
+      ludus_threat_hunting_rita_beacon_unique_connection_threshold: 4
       # Receive from the agents below
       ludus_threat_hunting_mirror_enabled: true
       ludus_threat_hunting_mirror_gre_agents:
-        - 10.RANGE.20.52          # the Linux victim
+        - 10.{{ range_second_octet }}.20.52          # the Linux victim
       ludus_threat_hunting_mirror_accept_pcap_stream: true
 
   - vm_name: "{{ range_id }}-victim-win"
@@ -466,7 +466,7 @@ ludus:
       - whispergate.ludus_threat_hunting
     role_vars:
       ludus_threat_hunting_mode: agent
-      ludus_threat_hunting_sensor_ip: 10.RANGE.20.50
+      ludus_threat_hunting_sensor_ip: 10.{{ range_second_octet }}.20.50
 
   - vm_name: "{{ range_id }}-victim-lin"
     hostname: "{{ range_id }}-VICTIM-LIN"
@@ -480,13 +480,10 @@ ludus:
       - whispergate.ludus_threat_hunting
     role_vars:
       ludus_threat_hunting_mode: agent
-      ludus_threat_hunting_sensor_ip: 10.RANGE.20.50
+      ludus_threat_hunting_sensor_ip: 10.{{ range_second_octet }}.20.50
 ```
 
-Substitute your range's second octet for `RANGE` - Ludus VLAN addressing is
-`10.<range_second_octet>.<vlan>.<ip_last_octet>`. Agent IPs have to be written
-out on the sensor because a role only ever sees its own host's facts; there is
-no cross-VM discovery.
+Agent IPs have to be written out on the sensor because a role only ever sees its own host's facts; there is no cross-VM discovery.
 
 Deploy the sensor first so the listener is up before agents start sending:
 
