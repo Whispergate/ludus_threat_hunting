@@ -5,10 +5,9 @@ galaxy_info:
   role_name: ludus_threat_hunting
   author: Whispergate
   description: >-
-    An Ansible Role that installs Zeek and RITA on a Debian or Ubuntu host to
-    build a network threat hunting sensor for a Ludus range, schedules rolling
-    imports of Zeek logs into RITA, and optionally installs traffic mirroring
-    agents on Linux and Windows victim machines.
+    Installs Zeek and RITA on a Debian/Ubuntu host as a network threat hunting
+    sensor for Ludus ranges, with rolling log imports and optional traffic
+    mirroring agents for Linux and Windows victims.
   company: ""
   license: BSD-2-Clause
   min_ansible_version: "2.14"
