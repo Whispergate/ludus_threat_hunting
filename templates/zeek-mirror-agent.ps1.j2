@@ -58,37 +58,44 @@ function Invoke-PktmonLoop {
         from recording its own upload to the sensor and amplifying it. The
         cost is a blind window during each upload.
     #>
+    $ErrorActionPreference = 'Continue'
     $etl   = Join-Path $WorkDir 'capture.etl'
     $pcap  = Join-Path $WorkDir 'capture.pcapng'
 
+    & pktmon filter remove 2>$null
+    & pktmon stop 2>$null
+
     while ($true) {
+        Remove-Item $etl, $pcap -Force -ErrorAction SilentlyContinue
+
+        & pktmon start --capture --pkt-size 0 --file-name $etl --file-size 512 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "pktmon start failed (exit code $LASTEXITCODE)"
+            Start-Sleep -Seconds 15
+            continue
+        }
+
+        Start-Sleep -Seconds $ChunkSecs
+        & pktmon stop 2>$null
+
+        if (-not (Test-Path $etl)) {
+            Write-Log "pktmon produced no capture file"
+            Start-Sleep -Seconds 10
+            continue
+        }
+
+        & pktmon etl2pcap $etl --out $pcap 2>$null
+        if (-not (Test-Path $pcap)) {
+            Write-Log "etl2pcap produced no output"
+            Start-Sleep -Seconds 10
+            continue
+        }
+
         try {
-            Remove-Item $etl, $pcap -Force -ErrorAction SilentlyContinue
-            & pktmon stop 2>&1 | Out-Null
-
-            # --pkt-size 0 keeps whole packets; truncated payloads would break
-            # Zeek's protocol analyzers and RITA's data size scoring.
-            & pktmon start --capture --pkt-size 0 --file-name $etl --file-size 512 2>&1 | Out-Null
-            Start-Sleep -Seconds $ChunkSecs
-            & pktmon stop 2>&1 | Out-Null
-
-            if (-not (Test-Path $etl)) {
-                Write-Log "pktmon produced no capture file"
-                Start-Sleep -Seconds 10
-                continue
-            }
-
-            & pktmon etl2pcap $etl --out $pcap 2>&1 | Out-Null
-            if (-not (Test-Path $pcap)) {
-                Write-Log "etl2pcap produced no output"
-                Start-Sleep -Seconds 10
-                continue
-            }
-
             $fs = [System.IO.File]::OpenRead($pcap)
             try { Send-Stream -Source $fs } finally { $fs.Dispose() }
         } catch {
-            Write-Log "pktmon cycle failed: $($_.Exception.Message)"
+            Write-Log "upload failed: $($_.Exception.Message)"
             Start-Sleep -Seconds 15
         }
     }
