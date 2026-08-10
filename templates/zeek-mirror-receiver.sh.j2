@@ -62,6 +62,8 @@ up() {
         ip link add zinject-in type veth peer name zinject-out
     fi
     ip link set zinject-in master "$BRIDGE"
+    ip link set zinject-in mtu 65535
+    ip link set zinject-out mtu 65535
     ip link set zinject-in up
     ip link set zinject-out up
 {% endif %}

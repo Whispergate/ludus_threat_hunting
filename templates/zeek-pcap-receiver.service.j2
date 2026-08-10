@@ -10,7 +10,7 @@ Requires=zeek-mirror-receiver.service
 # agent its own tcpreplay, so one agent disconnecting does not disturb others.
 ExecStart=/usr/bin/socat -u \
     TCP-LISTEN:{{ ludus_threat_hunting_mirror_pcap_stream_port }},reuseaddr,fork \
-    EXEC:/usr/local/bin/zeek-pcap-inject
+    EXEC:/usr/local/bin/zeek-pcap-inject,pipes
 Restart=always
 RestartSec=5
 
