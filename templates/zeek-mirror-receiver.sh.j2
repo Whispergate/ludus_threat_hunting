@@ -54,6 +54,18 @@ up() {
         index=$((index + 1))
     done
 
+{% if ludus_threat_hunting_mirror_accept_pcap_stream %}
+    # veth pair for pcap stream injection. tcpreplay sends on the outside
+    # end (zinject-out); frames enter the bridge through the inside end
+    # (zinject-in), where Zeek sees them as RX.
+    if ! ip_link_exists "zinject-in"; then
+        ip link add zinject-in type veth peer name zinject-out
+    fi
+    ip link set zinject-in master "$BRIDGE"
+    ip link set zinject-in up
+    ip link set zinject-out up
+{% endif %}
+
     echo "Mirror receiver up: bridge ${BRIDGE}, ${index} GRE agent(s)."
 }
 
@@ -75,6 +87,7 @@ down() {
     for dev in $(ip -o link show | awk -F': ' '{print $2}' | cut -d@ -f1 | grep "^${DEV_PREFIX}" || true); do
         ip link del "$dev" 2>/dev/null || true
     done
+    ip link del zinject-in 2>/dev/null || true
     ip link del "$BRIDGE" 2>/dev/null || true
     echo "Mirror receiver down."
 }

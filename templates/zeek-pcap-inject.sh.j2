@@ -18,7 +18,7 @@ set -o pipefail
 
 exec /usr/bin/editcap -F pcap - - 2>/dev/null \
     | /usr/bin/tcpreplay \
-        --intf1="{{ ludus_threat_hunting_mirror_bridge }}" \
+        --intf1=zinject-out \
         --topspeed \
         --quiet \
         -
