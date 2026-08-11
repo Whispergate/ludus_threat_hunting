@@ -4,6 +4,18 @@
 ##! ssl and ssl certificate logs; the stock local.zeek already produces all of
 ##! them, so this file only carries opt-in changes.
 
+# Replayed pcap streams carry incorrect TCP checksums from capture-side
+# checksum offloading.  ignore_checksums is a const that Zeek may read
+# before scripts load, so we also populate the runtime option
+# ignore_checksums_nets to cover all subnets.
+redef ignore_checksums = T;
+redef ignore_checksums_nets += { 0.0.0.0/0, [::]/0 };
+
+# Replayed traffic arrives in bursts every {{ ludus_threat_hunting_agent_pktmon_chunk_seconds }}s.
+# Lowering tcp_inactivity_timeout below that interval forces each burst into
+# its own conn.log entry, which is what RITA needs for beacon scoring.
+redef tcp_inactivity_timeout = {{ [(ludus_threat_hunting_agent_pktmon_chunk_seconds - 15), 30] | max }}secs;
+
 {% if ludus_threat_hunting_zeek_json_logs %}
 # JSON output. RITA reads both TSV and JSON, but JSON is roughly 2-3x larger
 # on disk for the same traffic.
